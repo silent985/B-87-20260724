@@ -1,184 +1,291 @@
-import React, { useState, useEffect } from 'react';
-import { Layout, Button, Input, message, Tree, Empty } from 'antd';
-import { FolderOpenOutlined, FileMarkdownOutlined, SaveOutlined } from '@ant-design/icons';
-import type { DirectoryTreeProps } from 'antd/es/tree';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import type { FileItem } from './types';
-import './App.css';
+import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { Layout, Button, Input, message, Tree, Empty, Breadcrumb } from 'antd'
+import { FolderOpenOutlined, FileMarkdownOutlined, SaveOutlined, ArrowUpOutlined } from '@ant-design/icons'
+import type { DirectoryTreeProps } from 'antd/es/tree'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import type { FileItem } from './types'
+import { getDirFromFilePath, getFileNameFromPath, computeNewPath, shouldRenameFile } from './file-utils'
+import './App.css'
 
-const { Header, Sider, Content } = Layout;
-const { TextArea } = Input;
-const { DirectoryTree } = Tree;
+const { Header, Sider, Content } = Layout
+const { TextArea } = Input
+const { DirectoryTree } = Tree
 
 const App: React.FC = () => {
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [content, setContent] = useState<string>('');
-  const [currentFile, setCurrentFile] = useState<string | null>(null);
-  const [fileName, setFileName] = useState<string>('Untitled');
+  const [files, setFiles] = useState<FileItem[]>([])
+  const [content, setContent] = useState<string>('')
+  const [currentFile, setCurrentFile] = useState<string | null>(null)
+  const [fileName, setFileName] = useState<string>('Untitled')
+  const [currentDir, setCurrentDir] = useState<string>('')
+  const [isDirty, setIsDirty] = useState<boolean>(false)
+  const [isLoading, setIsLoading] = useState<boolean>(false)
+
+  const loadRequestIdRef = useRef(0)
+  const saveRequestIdRef = useRef(0)
+  const contentRef = useRef(content)
+  const currentFileRef = useRef(currentFile)
+  const fileNameRef = useRef(fileName)
+  const currentDirRef = useRef(currentDir)
+  const isDirtyRef = useRef(isDirty)
+
+  contentRef.current = content
+  currentFileRef.current = currentFile
+  fileNameRef.current = fileName
+  currentDirRef.current = currentDir
+  isDirtyRef.current = isDirty
+
+  const listDir = useCallback(async (dirPath: string) => {
+    setIsLoading(true)
+    try {
+      const fileList = await window.markdownAPI.listDir(dirPath)
+      setFiles(fileList)
+      setCurrentDir(dirPath)
+    } catch (e) {
+      message.error('加载目录失败')
+      console.error(e)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  const confirmDiscardChanges = useCallback((): boolean => {
+    if (isDirtyRef.current) {
+      return window.confirm('您有未保存的更改，确定要放弃吗？')
+    }
+    return true
+  }, [])
+
+  const loadFile = useCallback(async (filePath: string) => {
+    if (!confirmDiscardChanges()) return
+
+    const requestId = ++loadRequestIdRef.current
+    const contentSnapshot = contentRef.current
+    setIsLoading(true)
+    try {
+      const fileContent = await window.markdownAPI.readFile(filePath)
+      if (requestId !== loadRequestIdRef.current) return
+      if (contentRef.current !== contentSnapshot) return
+      setContent(fileContent)
+      setCurrentFile(filePath)
+      setIsDirty(false)
+      setFileName(getFileNameFromPath(filePath))
+    } catch {
+      if (requestId === loadRequestIdRef.current) {
+        message.error('加载文件失败')
+      }
+    } finally {
+      if (requestId === loadRequestIdRef.current) {
+        setIsLoading(false)
+      }
+    }
+  }, [confirmDiscardChanges])
+
+  const enterDirectory = useCallback((dirPath: string) => {
+    if (!confirmDiscardChanges()) return
+    loadRequestIdRef.current++
+    setContent('')
+    setCurrentFile(null)
+    setFileName('Untitled')
+    setIsDirty(false)
+    listDir(dirPath)
+  }, [confirmDiscardChanges, listDir])
+
+  const goUpDirectory = useCallback(() => {
+    if (!currentDirRef.current) return
+    if (!confirmDiscardChanges()) return
+    const parentPath = getDirFromFilePath(currentDirRef.current)
+    if (parentPath && parentPath !== currentDirRef.current) {
+      loadRequestIdRef.current++
+      setContent('')
+      setCurrentFile(null)
+      setFileName('Untitled')
+      setIsDirty(false)
+      listDir(parentPath)
+    }
+  }, [confirmDiscardChanges, listDir])
+
+  const saveFile = useCallback(async (): Promise<boolean> => {
+    let filePath = currentFileRef.current
+    const contentSnapshot = contentRef.current
+    const fileNameSnapshot = fileNameRef.current
+
+    if (filePath) {
+      if (shouldRenameFile(filePath, fileNameSnapshot)) {
+        const newPath = computeNewPath(filePath, fileNameSnapshot)
+        try {
+          await window.markdownAPI.renameFile(filePath, newPath)
+          filePath = newPath
+          setCurrentFile(newPath)
+        } catch (e) {
+          console.error(e)
+          message.error('重命名文件失败')
+          return false
+        }
+      }
+    } else {
+      try {
+        const savePath = await window.markdownAPI.showSaveDialog(fileNameSnapshot)
+        if (savePath) {
+          filePath = savePath
+          setCurrentFile(filePath)
+          const newName = getFileNameFromPath(savePath)
+          setFileName(newName)
+        } else {
+          return false
+        }
+      } catch (e: unknown) {
+        console.error(e)
+        const msg = e instanceof Error ? e.message : String(e)
+        message.error(`创建文件失败: ${msg}`)
+        return false
+      }
+    }
+
+    if (!filePath) return false
+
+    const saveId = ++saveRequestIdRef.current
+    try {
+      await window.markdownAPI.saveFile(filePath, contentSnapshot)
+      if (saveId === saveRequestIdRef.current) {
+        if (contentRef.current === contentSnapshot) {
+          setIsDirty(false)
+        }
+      }
+      message.success('文件已保存')
+      const dir = getDirFromFilePath(filePath)
+      listDir(dir)
+      return true
+    } catch (e) {
+      console.error(e)
+      message.error('保存文件失败')
+      return false
+    }
+  }, [listDir])
+
+  const handleSaveAndClose = useCallback(async (): Promise<boolean> => {
+    return saveFile()
+  }, [saveFile])
 
   useEffect(() => {
-    // Initial load - maybe load a default directory or ask user?
-    // For now, let's try to list the current directory or home (needs proper path from main process)
-    // Actually, we can just start empty and let user "Open Folder" (implementation TBD)
-    // But for this MVP, let's load the current working directory from where the app launched
-    // We can ask the main process for the CWD using a new IPC or just pass it in list-dir
     const init = async () => {
-        try {
-            const defaultPath = await window.ipcRenderer.invoke('get-app-path');
-            listDir(defaultPath);
-        } catch (e) {
-            console.error('Failed to get default path', e);
-        }
-    };
-    init(); 
-  }, []);
-
-  const listDir = async (path: string) => {
-    try {
-        const fileList = await window.ipcRenderer.invoke('list-dir', path);
-        setFiles(fileList);
-        // setCurrentPath(path);
-    } catch (e) {
-        message.error('Failed to load directory');
-        console.error(e);
+      try {
+        const defaultPath = await window.markdownAPI.getAppPath()
+        listDir(defaultPath)
+      } catch (e) {
+        console.error('Failed to get default path', e)
+      }
     }
-  };
+    init()
+  }, [listDir])
 
-  const loadFile = async (filePath: string) => {
-      try {
-          const fileContent = await window.ipcRenderer.invoke('read-file', filePath);
-          setContent(fileContent);
-          setCurrentFile(filePath);
-          // Set filename from path, e.g. /path/to/foo.md -> foo.md
-          // Basic split since we might be on windows or mac
-          // Actually let's assume forward slashes or handle both
-          const name = filePath.split(/[/\\]/).pop() || 'Untitled';
-          setFileName(name);
-      } catch {
-          message.error('Failed to load file');
-      } finally {
-          // setLoading(false);
-      }
-  };
-
-  const saveFile = async () => {
-      let filePath = currentFile;
-      if (!filePath) {
-          try {
-              const savePath = await window.ipcRenderer.invoke('show-save-dialog', fileName);
-              if (savePath) {
-                  filePath = savePath;
-                  setCurrentFile(filePath);
-                   // Optionally refresh list if in same dir, but tricky without knowing defaults. 
-                   // Let's just save. 
-                   // Ideally we should reload the directory list if the new file is in the current directory.
-                   const defaultPath = await window.ipcRenderer.invoke('get-app-path');
-                   listDir(defaultPath); // Quick refresh of documents
-                   
-                   // Update filename state to match saved file
-                   const name = filePath.split(/[/\\]/).pop() || fileName;
-                   setFileName(name);
-              } else {
-                  return; // User cancelled
-              }
-          } catch (e: any) {
-              console.error(e);
-              message.error(`Failed to create file: ${e.message}`);
-              return;
-          }
-      }
-
-      if (!filePath) return;
-
-      try {
-          await window.ipcRenderer.invoke('save-file', filePath, content);
-          message.success('File saved');
-      } catch {
-          message.error('Failed to save file');
-      }
-  };
+  useEffect(() => {
+    window.markdownAPI.setUnsavedChangesHandler(() => isDirtyRef.current)
+    window.markdownAPI.setSaveAndCloseHandler(handleSaveAndClose)
+  }, [handleSaveAndClose])
 
   const onSelect: DirectoryTreeProps['onSelect'] = (_keys, info) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const node = info.node as any; // Cast to avoid strict type issues with custom data
-    // In our case, we need to map the tree data structure to our file structure
-    // But AntD DirectoryTree expects data in a specific format.
-    // Let's refactor to use a simpler Menu or List for now, or adapt the data.
-    
-    // Actually, let's stick to a simple List/Menu for the first iteration as Tree requires recursive data structure
-    // which list-dir (flat for one level) doesn't fully provide effortlessly without recursion.
-    // But wait, list-dir returns 1 level.
+    const node = info.node as { key: string; isLeaf?: boolean }
     if (!node.isLeaf) {
-        // It's a directory, maybe double click to enter?
-        return;
+      enterDirectory(node.key as string)
+      return
     }
-    // It's a file
-    // We need the full path. We can store it in the key.
-    loadFile(node.key as string);
-  };
+    loadFile(node.key as string)
+  }
 
-  // Adapter for AntD Tree Data
-  const treeData = files.map(file => ({
+  const onContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setContent(e.target.value)
+    setIsDirty(true)
+  }
+
+  const onFileNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFileName(e.target.value)
+    if (currentFile) {
+      setIsDirty(true)
+    }
+  }
+
+  const treeData = files
+    .slice()
+    .sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    .map((file) => ({
       title: file.name,
       key: file.path,
       isLeaf: !file.isDirectory,
-      icon: file.isDirectory ? <FolderOpenOutlined /> : <FileMarkdownOutlined />
-  }));
+      icon: file.isDirectory ? <FolderOpenOutlined /> : <FileMarkdownOutlined />,
+    }))
+
+  const breadcrumbItems = () => {
+    if (!currentDir) return []
+    const parts = currentDir.split(/[/\\]/).filter(Boolean)
+    return parts.map((part, index) => ({
+      title: index === parts.length - 1 ? <strong>{part}</strong> : part,
+    }))
+  }
 
   return (
     <Layout style={{ height: '100vh' }}>
-      <Sider width={250} theme="light" style={{ borderRight: '1px solid #f0f0f0' }}>
-        <div style={{ padding: '16px', fontWeight: 'bold' }}>Files</div>
-        <DirectoryTree
+      <Sider width={280} theme="light" style={{ borderRight: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '12px 16px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>文件浏览器</span>
+          <Button
+            size="small"
+            icon={<ArrowUpOutlined />}
+            onClick={goUpDirectory}
+            disabled={!currentDir || isLoading}
+            title="返回上级目录"
+          />
+        </div>
+        <div style={{ padding: '0 16px 8px', fontSize: '12px', color: '#888', wordBreak: 'break-all' }}>
+          <Breadcrumb items={breadcrumbItems()} />
+        </div>
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          <DirectoryTree
             defaultExpandAll
             onSelect={onSelect}
             treeData={treeData}
-            onExpand={() => {
-                // Handle entering directories if we want deeply nested
-                // For now, assume flat or use list-dir logic to drill down
-                // If we want allow drilling down, we need to fetch children.
-                // Let's keep it simple: single level for now or recursive later.
-                // We'll just show the files in current dir.
-                // Users can only see files in root dir for starts.
-            }}
-        />
-        {files.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No files" />}
+            selectedKeys={currentFile ? [currentFile] : []}
+          />
+          {files.length === 0 && !isLoading && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无文件" />}
+        </div>
       </Sider>
       <Layout style={{ flex: 1, minWidth: 0 }}>
         <Header style={{ background: '#fff', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f0f0f0' }}>
-            <Input 
-                value={fileName} 
-                onChange={(e) => setFileName(e.target.value)} 
-                style={{ width: 300, fontSize: '1.2em', fontWeight: 'bold' }} 
-                variant="borderless"
-                placeholder="Filename"
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+            <Input
+              value={fileName}
+              onChange={onFileNameChange}
+              style={{ width: 300, fontSize: '1.2em', fontWeight: 'bold' }}
+              variant="borderless"
+              placeholder="文件名"
+              suffix={isDirty ? <span style={{ color: '#ff4d4f', fontSize: '16px' }}>●</span> : null}
             />
-            <Button type="primary" icon={<SaveOutlined />} onClick={saveFile}>
-                Save
-            </Button>
+          </div>
+          <Button type="primary" icon={<SaveOutlined />} onClick={saveFile} disabled={isLoading}>
+            保存
+          </Button>
         </Header>
         <Content style={{ padding: '24px', background: '#fff', display: 'flex', gap: '12px', height: '100%', overflow: 'hidden' }}>
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
-                <TextArea 
-                    value={content} 
-                    onChange={e => setContent(e.target.value)} 
-                    style={{ flex: 1, resize: 'none', height: '100%' }} 
-                    placeholder="Type markdown here..." 
-                />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
+            <TextArea
+              value={content}
+              onChange={onContentChange}
+              style={{ flex: 1, resize: 'none', height: '100%' }}
+              placeholder="在此输入 Markdown..."
+            />
+          </div>
+          <div style={{ flex: 1, border: '1px solid #d9d9d9', borderRadius: '6px', padding: '12px', overflow: 'auto', height: '100%', minWidth: 0 }}>
+            <div className="markdown-preview">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
             </div>
-            <div style={{ flex: 1, border: '1px solid #d9d9d9', borderRadius: '6px', padding: '12px', overflow: 'auto', height: '100%', minWidth: 0 }}>
-                {/* Simplified Preview - could add react-markdown later */}
-                <div className="markdown-preview">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {content}
-                    </ReactMarkdown>
-                </div>
-            </div>
+          </div>
         </Content>
       </Layout>
     </Layout>
-  );
-};
+  )
+}
 
-export default App;
+export default App

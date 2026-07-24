@@ -4,16 +4,31 @@ export interface FileItem {
   path: string;
 }
 
-export interface IpcRenderer {
-  invoke(channel: 'read-file', path: string): Promise<string>;
-  invoke(channel: 'save-file', path: string, content: string): Promise<boolean>;
-  invoke(channel: 'list-dir', path: string): Promise<FileItem[]>;
-  invoke(channel: 'get-app-path'): Promise<string>;
-  invoke(channel: 'show-save-dialog', defaultPath?: string): Promise<string | null>;
+export interface SaveDialogResult {
+  filePath: string | null;
+  canceled: boolean;
+}
+
+export interface OpenDialogResult {
+  filePaths: string[];
+  canceled: boolean;
+}
+
+export interface MarkdownApi {
+  readFile(path: string): Promise<string>;
+  writeFile(path: string, content: string): Promise<void>;
+  renameFile(oldPath: string, newPath: string): Promise<void>;
+  deleteFile(path: string): Promise<void>;
+  listDir(path: string): Promise<FileItem[]>;
+  getAppPath(): Promise<string>;
+  showSaveDialog(defaultPath?: string): Promise<SaveDialogResult>;
+  showOpenDialog(): Promise<OpenDialogResult>;
+  openExternal(url: string): Promise<void>;
+  onMainMessage(handler: (message: string) => void): () => void;
 }
 
 declare global {
   interface Window {
-    ipcRenderer: IpcRenderer;
+    markdownApi: MarkdownApi;
   }
 }

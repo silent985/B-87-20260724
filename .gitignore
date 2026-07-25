@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 dist-electron
+release
+.ebcache
 *.local
 
 # Editor directories and files
@@ -23,3 +25,5 @@ dist-electron
 *.njsproj
 *.sln
 *.sw?
+chat.md
+temp.md

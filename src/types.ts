@@ -1,19 +1,14 @@
-export interface FileItem {
-  name: string;
-  isDirectory: boolean;
-  path: string;
-}
+import type { DesktopApi, DirListing, FileEntry } from '../electron/ipc-contract'
 
-export interface IpcRenderer {
-  invoke(channel: 'read-file', path: string): Promise<string>;
-  invoke(channel: 'save-file', path: string, content: string): Promise<boolean>;
-  invoke(channel: 'list-dir', path: string): Promise<FileItem[]>;
-  invoke(channel: 'get-app-path'): Promise<string>;
-  invoke(channel: 'show-save-dialog', defaultPath?: string): Promise<string | null>;
-}
+export type { DesktopApi, DirListing, FileEntry }
 
+/**
+ * The renderer only ever talks to the main process through the strongly typed
+ * whitelist exposed on `window.api` by the preload script. There is
+ * deliberately no generic `ipcRenderer` on `window`.
+ */
 declare global {
   interface Window {
-    ipcRenderer: IpcRenderer;
+    api: DesktopApi
   }
 }

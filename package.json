@@ -10,6 +10,8 @@
     "dev": "vite",
     "build": "tsc && vite build && electron-builder",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
     "preview": "vite preview"
   },
   "build": {
@@ -17,6 +19,9 @@
       "dist-electron/**/*",
       "dist/**/*"
     ],
+    "directories": {
+      "output": "release"
+    },
     "appId": "com.example.markdownlocalapp",
     "mac": {
       "target": "dmg",
@@ -52,6 +57,7 @@
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",
     "vite-plugin-electron": "^0.29.0",
-    "vite-plugin-electron-renderer": "^0.14.6"
+    "vite-plugin-electron-renderer": "^0.14.6",
+    "vitest": "^4.1.10"
   }
 }
